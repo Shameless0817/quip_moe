@@ -14,3 +14,4 @@ hadamard_cuda/build/
 hadamard_cuda/dist/
 report*.nsys-rep
 report*.sqlite
+quantize_mixtral/offload_cache/
