@@ -30,7 +30,9 @@ parser.add_argument('--batch_size', default=16, type=int)
 parser.add_argument('--devset_size', default=384, type=int)
 parser.add_argument('--ctx_size', default=4096, type=int)
 parser.add_argument('--save_path', type=str, required=True)
-parser.add_argument('--hessian_path', type=str)
+parser.add_argument('--hessian_path', type=str, help='Legacy: single Hessian path for all layers')
+parser.add_argument('--dense_hessian_path', type=str, help='Hessian path for dense layers (attention Q/K/V/O)')
+parser.add_argument('--sparse_hessian_path', type=str, help='Hessian path for sparse layers (expert FFN)')
 parser.add_argument('--base_model', type=str, required=True)
 parser.add_argument('--model_type', default='auto', type=str,
                     choices=['auto', 'llama', 'mixtral', 'mistral'],
@@ -100,15 +102,14 @@ parser.add_argument('--gate_precision', default='bf16', type=str,
 def check_exist(idx, args):
     """检查层的量化文件是否已存在"""
     if args.model_type in ['mixtral']:
-        # 检查 Q/K/V/O 四个量化文件
         for suffix in ['q', 'k', 'v', 'o']:
             if not os.path.exists(f'{args.save_path}/{idx}_{suffix}.pt'):
                 return False
         
-        # 检查专家层 FP16 文件（暂不量化）
+        # 检查专家层量化文件
         for i in range(8):
             for w_name in ['w1', 'w2', 'w3']:
-                if not os.path.exists(f'{args.save_path}/{idx}_expert{i}_{w_name}_fp16.pt'):
+                if not os.path.exists(f'{args.save_path}/{idx}_expert{i}_{w_name}.pt'):
                     return False
         
         # 检查 gate 和 layernorm
@@ -140,7 +141,6 @@ def quantize_mixtral_layer(layer, idx, cb, args, device, pre_orig_emb, orig_emb,
     num_experts = model_config.num_local_experts
     
     with torch.no_grad():
-        # 直接替换层对象，而不是复制权重（QuantizedLinear 没有 weight 属性）
         mixed_layer.self_attn.q_proj = layer.self_attn.q_proj
         mixed_layer.self_attn.k_proj = layer.self_attn.k_proj
         mixed_layer.self_attn.v_proj = layer.self_attn.v_proj
@@ -181,32 +181,17 @@ def quantize_mixtral_layer(layer, idx, cb, args, device, pre_orig_emb, orig_emb,
         ('self_attn.o_proj', 'o'),
     ]
     
-    # 保存 gate 层为 FP16（不量化）
     if not args.quantize_gate:
         gate_state = layer.block_sparse_moe.gate.state_dict()
         torch.save(gate_state, f'{args.save_path}/{idx}_gate.pt')
         glog.info(f'Saved gate layer {idx} in FP16 (not quantized)')
     
-    # 保存所有专家层为 FP16（不量化）
     for i in range(num_experts):
-        expert = layer.block_sparse_moe.experts[i]
-        for w_name in ['w1', 'w2', 'w3']:
-            w_weight = getattr(expert, w_name).weight
-            torch.save(
-                {'weight': w_weight, 'is_quantized': False},
-                f'{args.save_path}/{idx}_expert{i}_{w_name}_fp16.pt'
-            )
-        glog.info(f'Saved expert {i} layer {idx} in FP16 (not quantized)')
-    
-    # 如果需要量化专家层，取消下面的注释：
-    # for i in range(num_experts):
-    #     linear_pairs.extend([
-    #         (f'block_sparse_moe.experts.{i}.w1', f'expert{i}_w1'),
-    #         (f'block_sparse_moe.experts.{i}.w2', f'expert{i}_w2'),
-    #         (f'block_sparse_moe.experts.{i}.w3', f'expert{i}_w3'),
-    #     ])
-    # ============================================================================
-    
+        linear_pairs.extend([
+            (f'block_sparse_moe.experts.{i}.w1', f'expert{i}_w1'),
+            (f'block_sparse_moe.experts.{i}.w2', f'expert{i}_w2'),
+            (f'block_sparse_moe.experts.{i}.w3', f'expert{i}_w3'),
+        ])
 
     finetune_mixtral.quantize_finetune_moe_decoder_layer(
         mixed_layer, 
