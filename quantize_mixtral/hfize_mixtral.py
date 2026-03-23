@@ -142,95 +142,38 @@ def main(args):
             layer.block_sparse_moe.gate.weight.copy_(gate_data['weight'].to(layer.block_sparse_moe.gate.weight.device))
             glog.info(f'loaded layer {ii} gate (FP16)')
         
-        # 加载专家层的 FP16 权重
+        # 加载专家层的量化权重（直接 unpack 到已存在的 QuantizedLinear）
         for expert_idx in range(num_experts):
             expert = layer.block_sparse_moe.experts[expert_idx]
-            
+
             # 加载 w1 (gate projection)
-            w1_path = f'{args.quantized_path}/{ii}_expert{expert_idx}_w1_fp16.pt'
+            w1_path = f'{args.quantized_path}/{ii}_expert{expert_idx}_w1.pt'
             if os.path.exists(w1_path):
-                w1_data = torch.load(w1_path, map_location=cpu, weights_only=False)
-                expert.w1.weight.copy_(w1_data['weight'].to(expert.w1.weight.device))
-            
+                saved_layer = torch.load(w1_path, map_location=cpu, weights_only=False)
+                utils.unpack_quip(expert.w1, saved_layer, codebook_id, codesz, codebook_version)
+                glog.info(f'✓ Loaded quantized w1 for expert {expert_idx} layer {ii}')
+            else:
+                glog.warning(f'✗ w1 file not found: {w1_path}')
+
             # 加载 w2 (down projection)
-            w2_path = f'{args.quantized_path}/{ii}_expert{expert_idx}_w2_fp16.pt'
+            w2_path = f'{args.quantized_path}/{ii}_expert{expert_idx}_w2.pt'
             if os.path.exists(w2_path):
-                w2_data = torch.load(w2_path, map_location=cpu, weights_only=False)
-                expert.w2.weight.copy_(w2_data['weight'].to(expert.w2.weight.device))
-            
+                saved_layer = torch.load(w2_path, map_location=cpu, weights_only=False)
+                utils.unpack_quip(expert.w2, saved_layer, codebook_id, codesz, codebook_version)
+                glog.info(f'✓ Loaded quantized w2 for expert {expert_idx} layer {ii}')
+            else:
+                glog.warning(f'✗ w2 file not found: {w2_path}')
+
             # 加载 w3 (up projection)
-            w3_path = f'{args.quantized_path}/{ii}_expert{expert_idx}_w3_fp16.pt'
+            w3_path = f'{args.quantized_path}/{ii}_expert{expert_idx}_w3.pt'
             if os.path.exists(w3_path):
-                w3_data = torch.load(w3_path, map_location=cpu, weights_only=False)
-                expert.w3.weight.copy_(w3_data['weight'].to(expert.w3.weight.device))
-        
-        glog.info(f'loaded layer {ii} all {num_experts} experts (FP16)')
+                saved_layer = torch.load(w3_path, map_location=cpu, weights_only=False)
+                utils.unpack_quip(expert.w3, saved_layer, codebook_id, codesz, codebook_version)
+                glog.info(f'✓ Loaded quantized w3 for expert {expert_idx} layer {ii}')
+            else:
+                glog.warning(f'✗ w3 file not found: {w3_path}')
 
-        # for expert_idx in range(num_experts):
-        #     expert = layer.block_sparse_moe.experts[expert_idx]
-
-        #     # 加载 w1 (gate projection)
-        #     w1_path = f'{args.quantized_path}/{ii}_expert{expert_idx}_w1.pt'
-        #     if os.path.exists(w1_path):
-        #         saved_layer = torch.load(w1_path, map_location=cpu, weights_only=False)
-                
-        #         from lib.linear import QuantizedLinear
-        #         shapes = saved_layer['shapes']
-        #         w1_quant = QuantizedLinear(
-        #             shapes[0][1],
-        #             shapes[0][0],
-        #             codesz,
-        #             quip_params.get('packsz', 1),
-        #             quip_params.get('pack_out', False),
-        #             quip_params.get('idx_dtype', 'int32'),
-        #             quip_params['codebook'],
-        #             rank=quip_params.get('lora_rank', 0),
-        #             rescale_WH=quip_params.get('rescale_WH', False),
-        #         )
-        #         utils.unpack_quip(w1_quant, saved_layer, codebook_id, codesz)
-        #         expert.w1 = w1_quant
-
-        #     # 加载 w2 (down projection)
-        #     w2_path = f'{args.quantized_path}/{ii}_expert{expert_idx}_w2.pt'
-        #     if os.path.exists(w2_path):
-        #         saved_layer = torch.load(w2_path, map_location=cpu, weights_only=False)
-                
-        #         shapes = saved_layer['shapes']
-        #         w2_quant = QuantizedLinear(
-        #             shapes[0][1],
-        #             shapes[0][0],
-        #             codesz,
-        #             quip_params.get('packsz', 1),
-        #             quip_params.get('pack_out', False),
-        #             quip_params.get('idx_dtype', 'int32'),
-        #             quip_params['codebook'],
-        #             rank=quip_params.get('lora_rank', 0),
-        #             rescale_WH=quip_params.get('rescale_WH', False),
-        #         )
-        #         utils.unpack_quip(w2_quant, saved_layer, codebook_id, codesz)
-        #         expert.w2 = w2_quant
-
-        #     # 加载 w3 (up projection)
-        #     w3_path = f'{args.quantized_path}/{ii}_expert{expert_idx}_w3.pt'
-        #     if os.path.exists(w3_path):
-        #         saved_layer = torch.load(w3_path, map_location=cpu, weights_only=False)
-                
-        #         shapes = saved_layer['shapes']
-        #         w3_quant = QuantizedLinear(
-        #             shapes[0][1],
-        #             shapes[0][0],
-        #             codesz,
-        #             quip_params.get('packsz', 1),
-        #             quip_params.get('pack_out', False),
-        #             quip_params.get('idx_dtype', 'int32'),
-        #             quip_params['codebook'],
-        #             rank=quip_params.get('lora_rank', 0),
-        #             rescale_WH=quip_params.get('rescale_WH', False),
-        #         )
-        #         utils.unpack_quip(w3_quant, saved_layer, codebook_id, codesz)
-        #         expert.w3 = w3_quant
-
-        # glog.info(f'loaded layer {ii} all {num_experts} experts')
+        glog.info(f'loaded layer {ii} all {num_experts} experts (quantized)')
 
     glog.info('All layers loaded successfully!')
     

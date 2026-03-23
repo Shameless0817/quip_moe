@@ -11,13 +11,87 @@ def set_seed(seed):
     torch.random.manual_seed(seed)
 
 
+def load_tokenizer_safe(model_path):
+    """安全地加载 tokenizer，处理各种边缘情况"""
+    from transformers import AutoTokenizer
+    import os
+    import json
+    
+    # 首先尝试从配置中读取原始模型路径
+    original_model = None
+    if os.path.isdir(model_path):
+        config_path = os.path.join(model_path, 'config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                    original_model = config.get('_name_or_path', None)
+                    # 如果原始路径就是当前路径或是相对路径，置为 None
+                    if original_model and (original_model == model_path or not original_model.startswith('/')):
+                        if not os.path.exists(original_model):  # 如果不是有效的绝对路径
+                            original_model = None
+            except Exception as e:
+                print(f"读取 config.json 失败: {e}")
+    
+    # 如果找到了原始模型路径，优先从原始路径加载
+    if original_model:
+        print(f"检测到原始模型路径: {original_model}，将从此路径加载 tokenizer")
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                original_model,
+                use_fast=False,
+                trust_remote_code=True
+            )
+            print(f"成功从原始路径加载 tokenizer")
+            return tokenizer
+        except Exception as e:
+            print(f"从原始路径加载失败: {e}，尝试其他方法...")
+    
+    # 尝试从当前路径加载
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path, 
+            use_fast=False,
+            trust_remote_code=True
+        )
+        return tokenizer
+    except (TypeError, ValueError, ImportError) as e:
+        print(f"警告: 从 {model_path} 加载 tokenizer 失败: {e}")
+        
+        # 最后尝试使用 use_fast=True
+        try:
+            print("尝试使用 fast tokenizer...")
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_path,
+                use_fast=True,
+                trust_remote_code=True
+            )
+            return tokenizer
+        except Exception as e2:
+            print(f"使用 fast tokenizer 也失败: {e2}")
+            
+            # 如果还有原始模型路径，再试一次 fast tokenizer
+            if original_model:
+                try:
+                    print(f"尝试从原始路径使用 fast tokenizer...")
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        original_model,
+                        use_fast=True,
+                        trust_remote_code=True
+                    )
+                    return tokenizer
+                except Exception as e3:
+                    print(f"所有方法都失败了: {e3}")
+            
+            raise RuntimeError(f"无法从 {model_path} 或 {original_model} 加载 tokenizer")
+
+
 def get_wikitext2(nsamples, seed, seqlen, model):
     from datasets import load_dataset
     traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
     testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    tokenizer = load_tokenizer_safe(model)
     trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')
     testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
 
@@ -41,8 +115,7 @@ def get_ptb(nsamples, seed, seqlen, model):
                            'penn_treebank',
                            split='validation')
 
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    tokenizer = load_tokenizer_safe(model)
     trainenc = tokenizer("\n\n".join(traindata['sentence']),
                          return_tensors='pt')
     testenc = tokenizer("\n\n".join(valdata['sentence']), return_tensors='pt')
@@ -70,8 +143,7 @@ def get_c4(nsamples, seed, seqlen, model):
         'allenai/c4',
         data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'},
         split='validation')
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    tokenizer = load_tokenizer_safe(model)
 
     import random
     random.seed(seed)
@@ -118,8 +190,7 @@ def get_ptb_new(nsamples, seed, seqlen, model):
     traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
     testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test')
 
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    tokenizer = load_tokenizer_safe(model)
     trainenc = tokenizer(" ".join(traindata['sentence']), return_tensors='pt')
     testenc = tokenizer(" ".join(testdata['sentence']), return_tensors='pt')
 
@@ -147,8 +218,7 @@ def get_c4_new(nsamples, seed, seqlen, model):
         data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'},
         split='validation')
 
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    tokenizer = load_tokenizer_safe(model)
 
     import random
     random.seed(seed)

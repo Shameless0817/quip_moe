@@ -41,6 +41,8 @@ def quantize_finetune_moe_decoder_layer(
         pre_orig_emb: 原始模型前一层的嵌入
         orig_emb: 原始模型当前层的嵌入
     """
+    print(quant_order)
+    exit()
     torch.manual_seed(idx)
     torch.set_num_threads(args.num_cpu_threads)
 
@@ -126,10 +128,15 @@ def quantize_finetune_moe_decoder_layer(
         
         with torch.no_grad():
             if isinstance(orig_linear, FusedLinear):
-                weights = torch.split(orig_linear.weight,
-                                      orig_linear.fuse_sizes, 0)
+                weights = torch.split(
+                    orig_linear.weight,
+                    orig_linear.fuse_sizes, 
+                    0
+                )
             else:
-                weights = [orig_linear.weight]
+                weights = [
+                    orig_linear.weight
+                ]
             
             quip.quantize_linear(
                 weights, 
@@ -172,12 +179,10 @@ def quantize_finetune_moe_decoder_layer(
             attrgetter('.'.join(split_attr[:-1]))(mixed_layer), split_attr[-1],
             quant_linear)
         
-        # 清理显存
         utils.clean()
         torch.cuda.empty_cache()
                 
       
-    # 所有层量化完成后，进行一次性微调（如果启用）
     if args.ft_epochs > 0:
         glog.info(f'All layers quantized, starting fine-tuning...')
         finetune_moe_decoder_layer(

@@ -20,61 +20,70 @@ parser.add_argument('--hf_output_path', type=str)
 
 def main(args):
     assert os.path.exists(args.quantized_path)
-    saved_config = torch.load(os.path.join(args.quantized_path, 'config.pt'))
+    saved_config = torch.load(os.path.join(args.quantized_path, 'config.pt'), weights_only=False)
     model_config = saved_config['model_config']
 
     codebook_id = codebook.get_id(model_config.quip_params['codebook'])
     codesz = model_config.quip_params['codesz']
+    codebook_version = model_config.quip_params.get('codebook_version', model_config.quip_params['codebook'])
 
     tokenizer = AutoTokenizer.from_pretrained(model_config._name_or_path)
 
     model_config.quip_params['model_version'] = MODEL_VERSION
-    model = LlamaForCausalLM.from_pretrained(model_config._name_or_path,
-                                             torch_dtype='auto',
-                                             low_cpu_mem_usage=True,
-                                             config=model_config).half()
+    print("name_or_path:", model_config._name_or_path)
+    model = LlamaForCausalLM.from_pretrained(
+        model_config._name_or_path,
+        torch_dtype='auto',
+        low_cpu_mem_usage=True,
+        config=model_config
+    ).half()
+    print(model)
+    exit()
     cpu = torch.device('cpu')
+
+
     if os.path.exists(f'{args.quantized_path}/lmhead.pt'):
         lmhead_data = torch.load(f'{args.quantized_path}/lmhead.pt',
-                                 map_location=cpu)
+                                 map_location=cpu, weights_only=False)
         model.lm_head.weight.copy_(lmhead_data['lm_head'])
         model.model.norm.weight.copy_(lmhead_data['norm'])
 
     for ii in range(len(model.model.layers)):
         layer = model.model.layers[ii]
+        # print("The type of linear", type(layer.self_attn.o_proj))
 
         if os.path.exists(f'{args.quantized_path}/{ii}_layernorm.pt'):
             ln_data = torch.load(f'{args.quantized_path}/{ii}_layernorm.pt',
-                                 map_location=cpu)
+                                 map_location=cpu, weights_only=False)
             layer.input_layernorm.weight.copy_(ln_data['input_layernorm'])
             layer.post_attention_layernorm.weight.copy_(
                 ln_data['post_attention_layernorm'])
 
         saved_layer = torch.load(f'{args.quantized_path}/{ii}_qkv.pt',
-                                 map_location=cpu)
+                                 map_location=cpu, weights_only=False)
         for i in range(len(saved_layer['scales'])):
             layer.self_attn.qkv_proj.fuse_scales[i].copy_(
                 saved_layer['scales'][i])
         utils.unpack_quip(layer.self_attn.qkv_proj, saved_layer, codebook_id,
-                          codesz)
+                          codesz, codebook_version)
 
         saved_layer = torch.load(f'{args.quantized_path}/{ii}_o.pt',
-                                 map_location=cpu)
+                                 map_location=cpu, weights_only=False)
         utils.unpack_quip(layer.self_attn.o_proj, saved_layer, codebook_id,
-                          codesz)
+                          codesz, codebook_version)
 
         saved_layer = torch.load(f'{args.quantized_path}/{ii}_up.pt',
-                                 map_location=cpu)
+                                 map_location=cpu, weights_only=False)
         for i in range(len(saved_layer['scales'])):
             layer.mlp.upgate_proj.fuse_scales[i].copy_(
                 saved_layer['scales'][i])
         utils.unpack_quip(layer.mlp.upgate_proj, saved_layer, codebook_id,
-                          codesz)
+                          codesz, codebook_version)
 
         saved_layer = torch.load(f'{args.quantized_path}/{ii}_down.pt',
-                                 map_location=cpu)
+                                 map_location=cpu, weights_only=False)
         utils.unpack_quip(layer.mlp.down_proj, saved_layer, codebook_id,
-                          codesz)
+                          codesz, codebook_version)
         glog.info(f'loaded layer {ii} down')
 
     glog.info(f'saving model...')

@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 from lib import codebook
-from lib.utils import clean, dtype_from_str, get_hadK
+from lib.utils import clean, dtype_from_str, get_hadK, get_hadK_or_rfft, matmul_rfft
 
 
 class QuantizedLinear(nn.Module):
@@ -27,7 +27,7 @@ class QuantizedLinear(nn.Module):
         grad_ckpt=False,
     ):
         super().__init__()
-        assert rank == 0 # 7/22/2024 removed support for low rank correction
+        # assert rank == 0 # 7/22/2024 removed support for low rank correction
         self.in_features = in_features
         self.out_features = out_features
         self.rank = rank
@@ -74,14 +74,17 @@ class QuantizedLinear(nn.Module):
         self.built_codebook_class = False
         self.built_graph = False
         self.codebook_version = codebook_version
-
-        had_left_T, K_left = get_hadK(in_features)
+        # had_left_T, K_left = get_hadK(in_features)
+        had_left_T, K_left, phase_in = get_hadK_or_rfft(in_features) 
+        self.register_buffer('phase_in', phase_in, persistent=False)
         if had_left_T is not None:
             had_left_T = had_left_T.T.contiguous()
         self.register_buffer('had_left_T', had_left_T, persistent=False)
         
-        had_right, K_right = get_hadK(out_features)
+        # had_right, K_right = get_hadK(out_features)
+        had_right, K_right, phase_out = get_hadK_or_rfft(out_features)
         self.register_buffer('had_right', had_right, persistent=False)
+        self.register_buffer('phase_out', phase_out, persistent=False)
         
         self.K_left = K_left
         self.K_right = K_right
@@ -144,6 +147,9 @@ class QuantizedLinear(nn.Module):
                 clean()
 
             self.built_codebook_class = True
+        
+        if self.phase_in is not None:
+            input = utils.matmul_rfft(input, self.phase_in)
 
         result = self.codebook_class(
             input,
@@ -161,7 +167,12 @@ class QuantizedLinear(nn.Module):
             scaleWH=self.scaleWH,
             packed=self.packed,
             resid_scale_override=self.resid_scale_override,
-            train_mode=self.train_mode).to(input.dtype)
+            train_mode=self.train_mode
+        ).to(input.dtype)
+
+        if self.phase_out is not None:
+            result = utils.matmul_rfft(result, self.phase_out)
+
         if self.has_bias:
             return result + self.bias
         return result

@@ -1,0 +1,18 @@
+CUDA_VISIBLE_DEVICES=0,1,2,3 python quantize_qwen1.5/quantize_finetune_qwen15.py \
+  --model_type qwen \
+  --base_model Qwen/Qwen1.5-MoE-A2.7B \
+  --save_path ./quantized_qwen15_2bit_nocomp \
+  --codebook E8P12 \
+  --dense_hessian_path /fact_home/zeyuli/quip_sharp/qwen15_hessian_qkvo \
+  --sparse_hessian_path /fact_home/zeyuli/quip_sharp/qwen15_hessian_experts \
+  --shared_hessian_path /fact_home/zeyuli/quip_sharp/qwen15_hessian_shared_experts \
+  --ft_epochs 0 \
+  --ft_valid_size 128 \
+  --ft_bs 1 \
+  --use_fp64 \
+  --rescale_WH \
+  --expert_batch_size 4 \
+  --quantize_shared_expert \
+  --batch_size 16 \
+  --devset_size 384 \
+  --ctx_size 4096

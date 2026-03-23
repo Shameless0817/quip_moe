@@ -1,0 +1,12 @@
+CUDA_VISIBLE_DEVICES=2,3 python /fact_home/zeyuli/quip_sharp/quantize_deepseek/quantize_finetune_deepseek_s.py \
+    --base_model deepseek-ai/deepseek-moe-16b-base \
+    --model_type deepseek \
+    --save_path deepseek_quip_qkvo \
+    --codebook E8P12 \
+    --incoh_mode kron \
+    --dense_hessian_path /fact_home/zeyuli/quip_sharp/hessians_deepseek_moe_16b_base_qkvo \
+    --sparse_hessian_path /fact_home/zeyuli/quip_sharp/hessians_deepseek_moe_16b_base_experts \
+    --devset_size 128 \
+    --batch_size 32 \
+    --ft_epochs 0 \
+    --ft_valid_size 32

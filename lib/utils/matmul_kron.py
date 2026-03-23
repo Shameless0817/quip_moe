@@ -1,5 +1,6 @@
 import math
 
+import torch
 import primefac
 import scipy
 

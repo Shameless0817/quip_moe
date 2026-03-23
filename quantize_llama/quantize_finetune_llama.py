@@ -17,6 +17,8 @@ from lib.algo import finetune, quip
 from lib.linear import FusedLinear
 from model.llama import LlamaDecoderLayer
 
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', default=0, type=int)
 parser.add_argument('--num_cpu_threads', default=8, type=int)
@@ -28,10 +30,10 @@ parser.add_argument('--hessian_path', type=str)
 parser.add_argument('--base_model', type=str)
 parser.add_argument('--sigma_reg', default=1e-2, type=float)
 parser.add_argument('--sigma_reg2', default=1e-2, type=float)
-parser.add_argument('--incoh_mode',
-                    default='had',
-                    type=str,
-                    choices=['had', 'kron'])
+parser.add_argument('--had_block_size',
+                    default=64,
+                    type=int,
+                    help='Block size for blockwise Hadamard transform (must be power of 2)')
 parser.add_argument('--lora_rank',
                     default=0,
                     type=int,
@@ -92,7 +94,11 @@ def quantize_llama_layer(layer, idx, cb, args, device, pre_orig_emb, orig_emb,
 
         mixed_layer.self_attn.o_proj = layer.self_attn.o_proj
 
-        weights = [layer.mlp.up_proj.weight, layer.mlp.gate_proj.weight]
+        weights = [
+            layer.mlp.up_proj.weight, 
+            layer.mlp.gate_proj.weight
+        ]
+
         fused_upgate_proj = FusedLinear(-1, [_.shape[0] for _ in weights],
                                         weights[0].shape[1],
                                         sum([_.shape[0] for _ in weights]),
@@ -109,13 +115,20 @@ def quantize_llama_layer(layer, idx, cb, args, device, pre_orig_emb, orig_emb,
         mixed_layer.post_attention_layernorm.weight.copy_(
             layer.post_attention_layernorm.weight)
 
-    finetune.quantize_finetune_decoder_layer(mixed_layer,
-                                             [('self_attn.qkv_proj', 'qkv'),
-                                              ('self_attn.o_proj', 'o'),
-                                              ('mlp.upgate_proj', 'up'),
-                                              ('mlp.down_proj', 'down')], idx,
-                                             cb, args, device, pre_orig_emb,
-                                             orig_emb)
+    finetune.quantize_finetune_decoder_layer(
+        mixed_layer,
+        [
+          ('self_attn.qkv_proj', 'qkv'),
+          ('self_attn.o_proj', 'o'),
+          ('mlp.upgate_proj', 'up'),
+          ('mlp.down_proj', 'down')], 
+          idx,
+          cb, 
+          args, 
+          device, 
+          pre_orig_emb,
+          orig_emb
+      )
 
     torch.save(
         {

@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from lib.utils import gptq_data_utils
 from lib.utils.unsafe_import import model_from_hf_path
+from transformers import AutoTokenizer
 
 torch.set_grad_enabled(False)
 
@@ -24,10 +25,19 @@ parser.add_argument('--no_use_flash_attn', action='store_true')
 
 def main(args):
     datasets = ['wikitext2', 'c4']
+    glog.info(f'Evaluating model from hf_path={args.hf_path}')
     model, model_str = model_from_hf_path(
         args.hf_path,
         use_cuda_graph=not args.no_use_cuda_graph,
         use_flash_attn=not args.no_use_flash_attn)
+    print(model)
+    # input_texts = "The capital of France is"
+    # tokenizer = AutoTokenizer.from_pretrained(args.hf_path, trust_remote_code=True)
+    # input_ids = tokenizer(input_texts, return_tensors='pt').input_ids.cuda() 
+    # output_texts = model.generate(input_ids, max_length=50)
+    # print("Generated text:", tokenizer.batch_decode(output_texts, skip_special_tokens=True))
+    # # exit() 
+
 
     for dataset in datasets:
         input_tok = gptq_data_utils.get_test_tokens(dataset,
@@ -39,7 +49,9 @@ def main(args):
             nsamples, args.seqlen)
 
         if not args.no_use_cuda_graph:
-            model.reset()
+            # 只在模型有 reset 方法时调用（某些模型可能不支持）
+            if hasattr(model, 'reset'):
+                model.reset()
 
         loss_fct = torch.nn.CrossEntropyLoss().cuda()
         acc_loss = 0.0

@@ -8,12 +8,22 @@ from tqdm import tqdm
 from lib import utils
 
 
-def RHT_H(H, SU):
+
+def RHT_H(H, SU, block_size=64):
+    """Apply randomized Hadamard transform to Hessian matrix H"""
+    # matmul_hadUt now has built-in fallback to blockwise when needed
     return utils.matmul_hadUt(utils.matmul_hadUt(H * SU).T * SU)
+    # return utils.matmul_hadUt(utils.matmul_hadUt(H * SU, block_size=block_size).T * SU, block_size=block_size)
 
 
-def RHT_W(W, SU, SV):
+def RHT_W(W, SU, SV, block_size=64):
+    """Apply randomized Hadamard transform to weight matrix W"""
+    # matmul_hadUt now has built-in fallback to blockwise when needed
     return utils.matmul_hadUt(utils.matmul_hadUt(W.T * SV).T * SU)
+    # return utils.matmul_hadUt(utils.matmul_hadUt(W.T * SV, block_size=block_size).T * SU, block_size=block_size)
+
+
+
 
 
 def incoherence_preprocess(H, W, args):
@@ -43,24 +53,57 @@ def incoherence_preprocess(H, W, args):
         Hr = Hr / scaleWH[:, None]
         scaleWH = scaleWH.cpu()
 
-    # randomized hadamard transformation on H, W
-    if args.incoh_mode == "had":
-        SU = (torch.randn(n, device=device).sign() + 1e-5).sign().to(dtype_)
-        SV = (torch.randn(m, device=device).sign() + 1e-5).sign().to(dtype_)
-        Hr = RHT_H(Hr, SU)
-        Wr = RHT_W(Wr, SU, SV)
-    # randomized kronecker product on H, W
-    elif args.incoh_mode == "kron":
-        SU = utils.rand_ortho_butterfly_noblock(n).to(dtype_).to(device)
-        SV = utils.rand_ortho_butterfly_noblock(m).to(dtype_).to(device)
-        Hr = SU @ Hr @ SU.T
-        Wr = SV @ Wr @ SU.T
-    else:
-        raise NotImplementedError
-    SV = SV.cpu()
-    SU = SU.cpu()
+    glog.info("Applying randomized Hadamard transform for incoherence")
+    SU = (torch.randn(n, device=device).sign() + 1e-5).sign().to(dtype_)
+    SV = (torch.randn(m, device=device).sign() + 1e-5).sign().to(dtype_)
 
-    Lhr = torch.linalg.cholesky(Hr)
+    # Get block size from args, default to 64
+    block_size = getattr(args, 'had_block_size', 64)
+
+    # Check H before transformation
+    diag_before = torch.diag(Hr).clone()
+    if (diag_before <= 0).any():
+        glog.warning(f"Hr has {(diag_before <= 0).sum()} non-positive diagonal elements before Hadamard transform")
+        glog.warning(f"Diagonal range: [{diag_before.min()}, {diag_before.max()}]")
+
+    Hr = RHT_H(Hr, SU, block_size=block_size)
+    Wr = RHT_W(Wr, SU, SV, block_size=block_size)
+
+    # Check H after transformation
+    diag_after = torch.diag(Hr)
+    if (diag_after <= 0).any():
+        glog.warning(f"Hr has {(diag_after <= 0).sum()} non-positive diagonal elements after Hadamard transform")
+        glog.warning(f"Diagonal range: [{diag_after.min()}, {diag_after.max()}]")
+    
+    # NOTE: Do NOT move SU/SV to CPU here. They need to stay on the computation device
+    # until all operations are complete. The final device transfer happens in the attr dict
+    # construction (lines 538-540) where they're moved to orig_device.
+    # Moving to CPU here causes device mismatch errors when scales (GPU) multiplies SV (CPU).
+
+    # Add regularization to ensure Hr is positive definite after transformation
+    # This is crucial because Hadamard/Kronecker transforms can introduce numerical issues
+
+    diag_mean = torch.diag(Hr).mean()
+    if diag_mean <= 0:
+        glog.warning(f"Hr has non-positive diagonal mean: {diag_mean}. Adding strong regularization.")
+        Hr = Hr + torch.eye(Hr.shape[0], device=Hr.device, dtype=Hr.dtype) * 1e-3
+    else:
+        # Add small regularization based on diagonal magnitude
+        reg_strength = max(1e-6, diag_mean * 1e-4)
+        Hr = Hr + torch.eye(Hr.shape[0], device=Hr.device, dtype=Hr.dtype) * reg_strength
+
+    try:
+        Lhr = torch.linalg.cholesky(Hr)
+    except torch._C._LinAlgError as e:
+        glog.error(f"Cholesky decomposition failed: {e}")
+        glog.error(f"Hr diagonal: min={torch.diag(Hr).min()}, max={torch.diag(Hr).max()}, mean={torch.diag(Hr).mean()}")
+        glog.error(f"Hr eigenvalues: min={torch.linalg.eigvalsh(Hr).min()}")
+        # Try stronger regularization
+        glog.warning("Trying stronger regularization...")
+        reg_strength = max(1e-3, abs(torch.diag(Hr).mean()) * 1e-2)
+        Hr = Hr + torch.eye(Hr.shape[0], device=Hr.device, dtype=Hr.dtype) * reg_strength
+        Lhr = torch.linalg.cholesky(Hr)
+    
     if not torch.all(torch.isfinite(Lhr)):
         return None
 
@@ -71,15 +114,8 @@ def incoherence_preprocess(H, W, args):
 
 def incoherence_process(hatWr, SU, SV, scaleWH, args):
     device = hatWr.device
-    # reverse hadamard transformation
-    if args.incoh_mode == 'had':
-        hatWr = (utils.matmul_hadU(
-            (utils.matmul_hadU(hatWr) * SU.to(device)).T) * SV.to(device)).T
-    # reverse kronecker product
-    elif args.incoh_mode == 'kron':
-        hatWr = SV.T.to(device) @ hatWr @ SU.to(device)
-    else:
-        raise NotImplementedError
+    hatWr = (utils.matmul_hadU(
+        (utils.matmul_hadU(hatWr) * SU.to(device)).T) * SV.to(device)).T
 
     # reverse rescale W,H
     if args.rescale_WH:
@@ -175,8 +211,31 @@ def LDLQ_buffered(Wr, Hr, L, D, cb, args, buf_cols=128):
     buffer size is in groups of codesz (4) columns (for D4)
     '''
     (m, n) = Wr.shape
-    assert buf_cols % cb.codesz == 0
-    assert n % buf_cols == 0
+    
+    # Auto-adjust buf_cols to be compatible with n
+    # Find the largest divisor of n that is <= buf_cols and is a multiple of cb.codesz
+    if n % buf_cols != 0:
+        glog.warning(f"n={n} is not divisible by buf_cols={buf_cols}, adjusting...")
+        # Try to find a suitable buf_cols
+        for candidate in range(buf_cols, cb.codesz - 1, -cb.codesz):
+            if n % candidate == 0:
+                buf_cols = candidate
+                glog.info(f"Adjusted buf_cols to {buf_cols}")
+                break
+        else:
+            # If no divisor found, try smaller values
+            for candidate in range(cb.codesz, n + 1, cb.codesz):
+                if n % candidate == 0:
+                    buf_cols = candidate
+                    glog.info(f"Adjusted buf_cols to {buf_cols}")
+                    break
+            else:
+                # Last resort: use cb.codesz
+                buf_cols = cb.codesz
+                glog.warning(f"Could not find suitable buf_cols, using cb.codesz={cb.codesz}")
+    
+    assert buf_cols % cb.codesz == 0, f"buf_cols={buf_cols} must be divisible by cb.codesz={cb.codesz}"
+    assert n % buf_cols == 0, f"n={n} must be divisible by buf_cols={buf_cols}"
     buf_size = buf_cols // cb.codesz
 
     hatWr_T = torch.zeros(n, m, dtype=Hr.dtype, device=Hr.device)
@@ -472,6 +531,25 @@ def quantize(H_orig, W_orig, rank, codebook_orig, args, device='cpu'):
             torch.float16).to(orig_device),  # fuse Wscale into SV
         'scaleWH': scaleWH,
     }
+    
+    # 验证SU/SV参数是否有NaN或Inf (SU/SV可以有负值，这是正常的)
+    has_nan = torch.isnan(attr['SU']).any() or torch.isnan(attr['SV']).any()
+    has_inf = torch.isinf(attr['SU']).any() or torch.isinf(attr['SV']).any()
+    
+    if has_nan or has_inf:
+        su_min, su_max = attr['SU'].min().item(), attr['SU'].max().item()
+        sv_min, sv_max = attr['SV'].min().item(), attr['SV'].max().item()
+        glog.warning(f"⚠ Invalid SU/SV detected (NaN/Inf): SU=[{su_min:.6f}, {su_max:.6f}], SV=[{sv_min:.6f}, {sv_max:.6f}]")
+        glog.warning(f"  Replacing NaN/Inf with safe values")
+        attr['SU'] = torch.nan_to_num(attr['SU'], nan=1.0, posinf=1.0, neginf=-1.0)
+        attr['SV'] = torch.nan_to_num(attr['SV'], nan=1.0, posinf=1.0, neginf=-1.0)
+        # 适配 dtype 的 clamp 范围
+        if attr['SU'].dtype == torch.float16:
+            attr['SU'] = torch.clamp(attr['SU'], min=-6e4, max=6e4)
+            attr['SV'] = torch.clamp(attr['SV'], min=-6e4, max=6e4)
+        else:
+            attr['SU'] = torch.clamp(attr['SU'], min=-1e8, max=1e8)
+            attr['SV'] = torch.clamp(attr['SV'], min=-1e8, max=1e8)
 
     utils.clean()
 
@@ -498,8 +576,8 @@ def quantize_linear(weights, save_path, hessian_path, cb, args, device='cpu'):
     H = utils.regularize_H(H, n, args.sigma_reg)
     hatW, attr = quantize(H, W, args.lora_rank, cb, args, device)
     if len(scales) == 1:
-        # fuse single scale into SV too
-        attr['SV'] *= scales[0]
+        # fuse single scale into SV - need to move scale to same device as SV
+        attr['SV'] *= scales[0].to(attr['SV'].device)
         scales = [1.0]
     attr.update({
         'fused': len(shapes) > 1,
@@ -507,5 +585,6 @@ def quantize_linear(weights, save_path, hessian_path, cb, args, device='cpu'):
         'scales': scales,
     })
     torch.save(attr, save_path)
-    utils.show_metrics(hatW, W, H.to(dtype_), save_path)
+    # Ensure hatW and W are on the same device for metrics computation
+    utils.show_metrics(hatW, W.to(hatW.device), H.to(dtype_).to(hatW.device), save_path)
     utils.clean()

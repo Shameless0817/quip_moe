@@ -39,10 +39,10 @@ parser.add_argument('--model_type', default='auto', type=str,
                     help='Model type to quantize')
 parser.add_argument('--sigma_reg', default=1e-2, type=float)
 parser.add_argument('--sigma_reg2', default=1e-2, type=float)
-parser.add_argument('--incoh_mode',
-                    default='had',
-                    type=str,
-                    choices=['had', 'kron'])
+parser.add_argument('--had_block_size',
+                    default=64,
+                    type=int,
+                    help='Block size for blockwise Hadamard transform (must be power of 2)')
 parser.add_argument('--lora_rank',
                     default=0,
                     type=int,
@@ -129,8 +129,16 @@ def check_exist(idx, args):
 
 
 
-def quantize_mixtral_layer(layer, idx, cb, args, device, pre_orig_emb, orig_emb,
-                           model_config):
+def quantize_mixtral_layer(
+    layer, 
+    idx, 
+    cb, 
+    args, 
+    device, 
+    pre_orig_emb, 
+    orig_emb,
+    model_config
+):
     """量化Mixtral层"""
     if check_exist(idx, args):
         return
@@ -168,12 +176,10 @@ def quantize_mixtral_layer(layer, idx, cb, args, device, pre_orig_emb, orig_emb,
         mixed_layer.post_attention_layernorm.weight.copy_(
             layer.post_attention_layernorm.weight)
     
-    # ============================================================================
-    # 量化 Q/K/V/O 四个注意力投影层
-    # ============================================================================
+    # 量化 Q/K/V/O
     glog.info(f'Quantizing self_attn Q/K/V/O projections for layer {idx}')
     
-    # 量化 Q, K, V, O 四个投影
+    # 量化 Q, K, V, O projection
     linear_pairs = [
         ('self_attn.q_proj', 'q'),
         ('self_attn.k_proj', 'k'),
@@ -481,7 +487,6 @@ def main(args):
     glog.info('Quantization completed successfully!')
     glog.info(f'All quantized weights saved to {args.save_path}')
     
-
 
 if __name__ == '__main__':
     torch.set_grad_enabled(False)

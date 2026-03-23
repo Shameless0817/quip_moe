@@ -315,27 +315,82 @@ class MixtralQuantizedExpertMLP(nn.Module):
             self.resid_scale_override = -1
             self.train_mode = False
         
-        # Use separate w1, w2, w3 projections (no fusion) for FP16 compatibility
-        # w1: gate projection
-        self.w1 = nn.Linear(
-            self.hidden_size,
-            self.intermediate_size,
-            bias=False
-        )
+        # Use separate w1, w2, w3 projections (no fusion)
+        # If quip_params exists and model is quantized, use QuantizedLinear
+        # Otherwise use nn.Linear for FP16
+        from lib.linear import QuantizedLinear
         
-        # w2: down projection
-        self.w2 = nn.Linear(
-            self.intermediate_size,
-            self.hidden_size,
-            bias=False
-        )
+        use_quantized = hasattr(config, 'quip_params') and config.quip_params.get('lora_rank', 0) >= 0
         
-        # w3: up projection
-        self.w3 = nn.Linear(
-            self.hidden_size,
-            self.intermediate_size,
-            bias=False
-        )
+        if use_quantized:
+            # w1: gate projection (quantized)
+            self.w1 = QuantizedLinear(
+                self.hidden_size,
+                self.intermediate_size,
+                self.codesz,
+                self.packsz,
+                self.pack_out,
+                self.idx_dtype,
+                self.codebook_version,
+                rank=self.lora_rank,
+                rescale_WH=self.rescale_WH,
+                bias=False,
+                resid_scale_override=self.resid_scale_override,
+                train_mode=self.train_mode,
+            )
+            
+            # w2: down projection (quantized)
+            self.w2 = QuantizedLinear(
+                self.intermediate_size,
+                self.hidden_size,
+                self.codesz,
+                self.packsz,
+                self.pack_out,
+                self.idx_dtype,
+                self.codebook_version,
+                rank=self.lora_rank,
+                rescale_WH=self.rescale_WH,
+                bias=False,
+                resid_scale_override=self.resid_scale_override,
+                train_mode=self.train_mode,
+            )
+            
+            # w3: up projection (quantized)
+            self.w3 = QuantizedLinear(
+                self.hidden_size,
+                self.intermediate_size,
+                self.codesz,
+                self.packsz,
+                self.pack_out,
+                self.idx_dtype,
+                self.codebook_version,
+                rank=self.lora_rank,
+                rescale_WH=self.rescale_WH,
+                bias=False,
+                resid_scale_override=self.resid_scale_override,
+                train_mode=self.train_mode,
+            )
+        else:
+            # w1: gate projection (FP16)
+            self.w1 = nn.Linear(
+                self.hidden_size,
+                self.intermediate_size,
+                bias=False
+            )
+            
+            # w2: down projection (FP16)
+            self.w2 = nn.Linear(
+                self.intermediate_size,
+                self.hidden_size,
+                bias=False
+            )
+            
+            # w3: up projection (FP16)
+            self.w3 = nn.Linear(
+                self.hidden_size,
+                self.intermediate_size,
+                bias=False
+            )
         
         self.act_fn = ACT2FN[config.hidden_act]
 

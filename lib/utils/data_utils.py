@@ -25,7 +25,20 @@ def sym_to_flat(A):
 
 
 def register_H_hook(module, device):
-    n = module.in_features
+    # Get input dimension - handle different module types
+    if hasattr(module, 'in_features'):
+        # Standard nn.Linear module
+        n = module.in_features
+    elif hasattr(module, 'weight'):
+        # For modules like MoEGate that have weight but not in_features
+        # weight shape is typically [out_features, in_features]
+        n = module.weight.shape[1]
+    elif hasattr(module, 'gating_dim'):
+        # Fallback for modules with gating_dim attribute
+        n = module.gating_dim
+    else:
+        raise ValueError(f"Cannot determine input dimension for module type {type(module)}")
+    
     H = torch.zeros(n, n, dtype=torch.float64, device=device)
     mu = torch.zeros(n, dtype=torch.float64, device=device)
     ct = 0
@@ -56,30 +69,20 @@ def wrap_tokenizer(tokenizer, x, ctx_size):
 
 
 def sample_rp1t(tokenizer, size=128, ctx_size=2048, nproc=1):
-    dataset = load_dataset('togethercomputer/RedPajama-Data-1T-Sample',
+    dataset = load_dataset('ZengXiangyu/RedPajama-Data-1T-Sample',
                            split='train')
     devset = torch.zeros((size, ctx_size), dtype=torch.int64)
     saved = 0
-    if nproc > 1:
-        p = mp.Pool(nproc)
-        while saved < size:
-            seqs = [(tokenizer, dataset[torch.randint(len(dataset),
-                                                      (size, ))]['text'],
-                     ctx_size) for _ in range(nproc)]
-            tokens = p.starmap(wrap_tokenizer, seqs)
-            for i in range(len(tokens)):
-                lens = tokens[i].attention_mask.sum(dim=-1)
-                good = torch.where(lens == ctx_size)[0]
-                if len(good) > 0:
-                    if saved + len(good) > size:
-                        good = good[:size - saved]
-                    devset[saved:saved + len(good)] = tokens[i].input_ids[good]
-                    saved += len(good)
-                    print(saved)
-    else:
-        while saved < size:
-            tokens = tokenizer(dataset[torch.randint(len(dataset),
-                                                     (size, ))]['text'],
+    
+    # Note: Using multiprocessing with tokenizer is problematic due to serialization issues.
+    # Force single-process mode for reliability.
+    while saved < size:
+        # Sample random indices
+        sample_indices = torch.randint(len(dataset), (min(size - saved, 32),))
+        batch_texts = [dataset[int(idx)]['text'] for idx in sample_indices]
+        
+        try:
+            tokens = tokenizer(batch_texts,
                                return_tensors='pt',
                                truncation=True,
                                padding=True,
@@ -91,6 +94,9 @@ def sample_rp1t(tokenizer, size=128, ctx_size=2048, nproc=1):
                     good = good[:size - saved]
                 devset[saved:saved + len(good)] = tokens.input_ids[good]
                 saved += len(good)
+        except Exception as e:
+            continue
+    
     return devset
 
 
@@ -137,12 +143,7 @@ def load_quip(save_name, cb, args, device, return_scales=False):
         B = dict_loaded['B'].to(device)
         hatWr = hatWr + A @ B
         del A, B
-    if args.incoh_mode == "had":
-        hatW = (matmul_hadU((matmul_hadU(hatWr) * SU).T) * SV).T
-    elif args.incoh_mode == "kron":
-        hatW = SV.T @ hatWr @ SU
-    else:
-        raise NotImplementedError
+    hatW = (matmul_hadU((matmul_hadU(hatWr) * SU).T) * SV).T
     del SU, SV
     if args.rescale_WH:
         hatW = hatW / dict_loaded['scaleWH'][None, :].to(device)
@@ -157,7 +158,13 @@ def load_quip(save_name, cb, args, device, return_scales=False):
     return hatW
 
 
-def unpack_quip(module, saved_layer, codebook_id, codesz):
+def unpack_quip(
+    module, 
+    saved_layer, 
+    codebook_id, 
+    codesz, 
+    codebook_version=None
+):
     (m, n) = saved_layer['Qidxs'].shape
     if codebook_id in codebook.cache_permute_set:
         module.Qidxs.copy_(saved_layer['Qidxs'].view(
@@ -165,7 +172,6 @@ def unpack_quip(module, saved_layer, codebook_id, codesz):
                                                              n).contiguous())
     else:
         module.Qidxs.copy_(saved_layer['Qidxs'])
-
     if module.rank > 0:
         module.A.copy_(saved_layer['A'])
         module.B.copy_(saved_layer['B'])
@@ -175,6 +181,11 @@ def unpack_quip(module, saved_layer, codebook_id, codesz):
         module.scaleWH.copy_(saved_layer['scaleWH'])
 
     module.codebook_id.copy_(codebook_id)
+    # 从保存的权重中获取codebook_version
+    if codebook_version is not None:
+        module.codebook_version = codebook_version
+    elif 'codebook_version' in saved_layer:
+        module.codebook_version = saved_layer['codebook_version']
 
 
 def dtype_from_str(str):
@@ -183,6 +194,11 @@ def dtype_from_str(str):
         'torch.int32': torch.int32,
         'torch.int16': torch.int16,
         'torch.uint8': torch.uint8,
+        # 支持简短格式
+        'int64': torch.int64,
+        'int32': torch.int32,
+        'int16': torch.int16,
+        'uint8': torch.uint8,
     }
     return dtype_map[str]
 

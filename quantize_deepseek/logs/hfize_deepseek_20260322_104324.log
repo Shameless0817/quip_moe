@@ -1,0 +1,77 @@
+W0322 10:43:28.718616 3640757 warnings.py:109] /fact_home/zeyuli/quip_sharp/lib/codebook/__init__.py:6: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+  @torch.library.impl_abstract("quip_lib::decode_matvec_e8p")
+
+W0322 10:43:28.754301 3640757 warnings.py:109] /fact_home/zeyuli/quip_sharp/lib/codebook/__init__.py:25: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+  @torch.library.impl_abstract("quip_lib::decompress_packed_e8p")
+
+I0322 10:43:28.936846 3640757 utils.py:148] Note: detected 128 virtual cores but NumExpr set to maximum of 64, check "NUMEXPR_MAX_THREADS" environment variable.
+I0322 10:43:28.936942 3640757 utils.py:151] Note: NumExpr detected 128 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 16.
+I0322 10:43:28.936968 3640757 utils.py:164] NumExpr defaulting to 16 threads.
+I0322 10:43:29.114852 3640757 config.py:58] PyTorch version 2.6.0 available.
+W0322 10:43:29.309788 3640757 warnings.py:109] /fact_home/zeyuli/.conda/envs/quip_sharp/lib/python3.10/site-packages/fast_hadamard_transform.py:10: UserWarning: 使用 fast_hadamard_transform 的临时实现。为获得最佳性能，建议在GPU节点上编译安装真实的 fast_hadamard_transform。
+  warnings.warn(
+
+W0322 10:43:29.323733 3640757 warnings.py:109] /fact_home/zeyuli/quip_sharp/lib/utils/matmul_had.py:427: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+  @torch.library.impl_abstract("quip_lib::hadamard")
+
+I0322 10:43:46.991318 3640757 hfize_deepseek.py:86] Model has 64 routed experts per MoE layer
+Loading checkpoint shards:   0%|          | 0/7 [00:00<?, ?it/s]Loading checkpoint shards:  14%|█▍        | 1/7 [00:00<00:02,  2.11it/s]Loading checkpoint shards:  29%|██▊       | 2/7 [00:00<00:01,  2.63it/s]Loading checkpoint shards:  43%|████▎     | 3/7 [00:01<00:01,  2.85it/s]Loading checkpoint shards:  57%|█████▋    | 4/7 [00:01<00:01,  2.97it/s]Loading checkpoint shards:  71%|███████▏  | 5/7 [00:01<00:00,  3.08it/s]Loading checkpoint shards:  86%|████████▌ | 6/7 [00:02<00:00,  2.66it/s]Loading checkpoint shards: 100%|██████████| 7/7 [00:02<00:00,  2.64it/s]Loading checkpoint shards: 100%|██████████| 7/7 [00:02<00:00,  2.71it/s]
+Loading quantized layers:   0%|          | 0/28 [00:00<?, ?it/s]I0322 10:44:33.751542 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.751630 3640757 hfize_deepseek.py:129] Processing layer 0/27
+I0322 10:44:33.791995 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.792095 3640757 hfize_deepseek.py:129] Processing layer 1/27
+Loading quantized layers:   7%|▋         | 2/28 [00:00<00:01, 14.74it/s]I0322 10:44:33.887381 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.887456 3640757 hfize_deepseek.py:129] Processing layer 2/27
+I0322 10:44:33.888421 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.888445 3640757 hfize_deepseek.py:129] Processing layer 3/27
+I0322 10:44:33.889379 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.889402 3640757 hfize_deepseek.py:129] Processing layer 4/27
+I0322 10:44:33.890340 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.890362 3640757 hfize_deepseek.py:129] Processing layer 5/27
+I0322 10:44:33.891288 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.891311 3640757 hfize_deepseek.py:129] Processing layer 6/27
+I0322 10:44:33.892234 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.892254 3640757 hfize_deepseek.py:129] Processing layer 7/27
+I0322 10:44:33.893217 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.893238 3640757 hfize_deepseek.py:129] Processing layer 8/27
+I0322 10:44:33.894157 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.894178 3640757 hfize_deepseek.py:129] Processing layer 9/27
+I0322 10:44:33.895099 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.895125 3640757 hfize_deepseek.py:129] Processing layer 10/27
+I0322 10:44:33.896047 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.896068 3640757 hfize_deepseek.py:129] Processing layer 11/27
+I0322 10:44:33.897020 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.897041 3640757 hfize_deepseek.py:129] Processing layer 12/27
+I0322 10:44:33.897977 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.897999 3640757 hfize_deepseek.py:129] Processing layer 13/27
+I0322 10:44:33.898946 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.898967 3640757 hfize_deepseek.py:129] Processing layer 14/27
+I0322 10:44:33.899899 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.899919 3640757 hfize_deepseek.py:129] Processing layer 15/27
+I0322 10:44:33.900853 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.900875 3640757 hfize_deepseek.py:129] Processing layer 16/27
+I0322 10:44:33.901812 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.901834 3640757 hfize_deepseek.py:129] Processing layer 17/27
+I0322 10:44:33.902767 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.902787 3640757 hfize_deepseek.py:129] Processing layer 18/27
+I0322 10:44:33.903707 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.903728 3640757 hfize_deepseek.py:129] Processing layer 19/27
+I0322 10:44:33.904639 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.904660 3640757 hfize_deepseek.py:129] Processing layer 20/27
+I0322 10:44:33.905570 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.905591 3640757 hfize_deepseek.py:129] Processing layer 21/27
+I0322 10:44:33.906507 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.906528 3640757 hfize_deepseek.py:129] Processing layer 22/27
+I0322 10:44:33.907461 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.907482 3640757 hfize_deepseek.py:129] Processing layer 23/27
+I0322 10:44:33.908439 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.908460 3640757 hfize_deepseek.py:129] Processing layer 24/27
+I0322 10:44:33.909400 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.909420 3640757 hfize_deepseek.py:129] Processing layer 25/27
+I0322 10:44:33.910348 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.910369 3640757 hfize_deepseek.py:129] Processing layer 26/27
+I0322 10:44:33.911294 3640757 hfize_deepseek.py:128] ============================================================
+I0322 10:44:33.911314 3640757 hfize_deepseek.py:129] Processing layer 27/27
+Loading quantized layers: 100%|██████████| 28/28 [00:00<00:00, 174.15it/s]
+I0322 10:44:33.912389 3640757 hfize_deepseek.py:182] Finished loading quantized weights: loaded=75, missing=5306
+I0322 10:45:03.055524 3640757 hfize_deepseek.py:187] Saved HF model to /fact_home/zeyuli/quip_sharp/hf_deepseek_quip_full

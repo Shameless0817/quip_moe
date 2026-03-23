@@ -28,6 +28,12 @@ def get_susv_adam(susv_params, params, args):
 
 
 def save_susv(module, path):
+    # 检查模块是否有 SU 和 SV 属性（即是否已经量化）
+    if not hasattr(module, 'SU') or not hasattr(module, 'SV'):
+        import glog
+        glog.warning(f'Module {type(module).__name__} does not have SU/SV attributes, skipping save_susv for {path}')
+        return
+    
     saved_layer = torch.load(path, map_location=torch.device('cpu'))
     saved_layer['SU'] = module.SU.data.to(torch.float16)
     saved_layer['SV'] = module.SV.data.to(torch.float16)

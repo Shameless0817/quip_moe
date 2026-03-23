@@ -8,8 +8,10 @@ setup(
             'quiptools_cuda',
             ['quiptools_wrapper.cpp', 'quiptools.cu', 'quiptools_e8p_gemv.cu'],
             extra_compile_args={
-                'cxx': ['-g', '-lineinfo', '-std=c++20'],
-                'nvcc': ['-O2', '-g', '-Xcompiler', '-rdynamic', '-lineinfo', '-std=c++20']
+                'cxx': ['-g', '-lineinfo', '-std=c++17', '-fpermissive'],
+                'nvcc': ['-O2', '-g', '-Xcompiler', '-rdynamic,-fpermissive', '-lineinfo', '-std=c++17',
+                         '--expt-relaxed-constexpr', '--expt-extended-lambda',
+                         '-allow-unsupported-compiler']
             })
     ],
     cmdclass={'build_ext': cpp_extension.BuildExtension})

@@ -1,8 +1,75 @@
+import math
+
 import fast_hadamard_transform
 import torch
 
 from lib import utils
 
+_ORTHO_CACHE = {}
+
+def matmul_rfft(X, phase):
+    """对张量 X 的最后一个维度应用随机快速傅里叶变换 (RFFT)"""
+    n = X.shape[-1]
+    X = X.contiguous() # 强制内存连续，防止转置带来的 stride 报错
+    X_complex = torch.view_as_complex(X.view(*X.shape[:-1], n // 2, 2))
+    X_complex = X_complex * phase
+    X_fft = torch.fft.fft(X_complex, norm="ortho")
+    X_out = torch.view_as_real(X_fft).view(*X.shape[:-1], n)
+    return X_out
+
+
+def get_random_phase(n, device="cpu"):
+    """生成长度为 n/2 的随机复数相位"""
+    assert n % 2 == 0, "RFFT requires the feature dimension n to be even."
+    # 使用固定的随机种子以确保量化和推理时的相位一致
+    generator = torch.Generator(device=device)
+    generator.manual_seed(42) # 你可以根据需要修改种子或将其作为参数传入
+    angles = torch.rand(n // 2, generator=generator, device=device) * 2 * math.pi
+    phase = torch.exp(1j * angles)
+    return phase
+
+def generate_orthogonal_matrix_pytorch(dim):
+    if dim in _ORTHO_CACHE:
+        return _ORTHO_CACHE[dim]
+
+    # Deterministic matrix so quantization and runtime share the same transform.
+    generator = torch.Generator(device='cpu')
+    generator.manual_seed(20250320 + dim)
+    random_matrix = torch.randn(dim, dim, dtype=torch.float32, generator=generator)
+    
+    # 2. 进行 QR 分解
+    # Q 是正交矩阵，R 是上三角矩阵
+    q, r = torch.linalg.qr(random_matrix)
+    
+    # 3. (可选) 修正符号以保证均匀分布 (Haar measure)
+    # 这一步是为了让生成的正交矩阵在数学上更加完美随机
+    d = torch.diag(r)
+    ph = torch.where(d == 0, torch.ones_like(d), d.sign())
+    q *= ph
+    
+    # Keep float32 precision for non-standard factors (e.g. 171/22).
+    # This greatly reduces transform error for large dimensions like 10944.
+    q = q.to(torch.float32).contiguous()
+    _ORTHO_CACHE[dim] = q
+    return _ORTHO_CACHE[dim]
+
+
+def can_use_standard_hadamard(n):
+    """检查维度n是否支持标准Hadamard变换（在get_hadK中定义的所有情况）"""
+    # 必须包含 get_hadK 中的所有因子
+    # factors = [172, 156, 140, 136, 124, 116, 108, 100, 76, 60, 52, 36, 28, 20, 12]
+    factors = [172, 171, 156, 140, 136, 124, 116, 108, 100, 76, 60, 52, 36, 28, 22, 20, 12]
+    
+    # 检查是否是预定义因子的倍数
+    for factor in factors:
+        if n % factor == 0 and is_pow2(n // factor):
+            return True
+    
+    # 检查是否本身是2的幂
+    if is_pow2(n):
+        return True
+    
+    return False
 
 def get_hadK(n, transpose=False):
     hadK, K = None, None
@@ -10,6 +77,15 @@ def get_hadK(n, transpose=False):
         assert (is_pow2(n // 172))
         K = 172
         hadK = get_had172().T if transpose else get_had172()
+    elif n % 171 == 0:  # 10944 for deepseek
+        assert (is_pow2(n // 171))
+        K = 171
+        base = generate_orthogonal_matrix_pytorch(171)
+        # matmul_hadU scales by 1/sqrt(n), which assumes the K-block has
+        # Hadamard-style energy (H H^T = K I). Our cached orthogonal base has
+        # Q Q^T = I, so rescale by sqrt(K) to keep transform normalization correct.
+        scaled = base * math.sqrt(K)
+        hadK = scaled.T if transpose else scaled
     elif n % 156 == 0:  # llama-1-30b 3x hidden
         assert (is_pow2(n // 156))
         K = 156
@@ -58,6 +134,12 @@ def get_hadK(n, transpose=False):
         assert (is_pow2(n // 28))
         K = 28
         hadK = get_had28().T if transpose else get_had28()
+    elif n % 22 == 0:
+        assert (is_pow2(n // 22))
+        K = 22
+        base = generate_orthogonal_matrix_pytorch(22)
+        scaled = base * math.sqrt(K)
+        hadK = scaled.T if transpose else scaled
     elif n % 20 == 0:
         assert (is_pow2(n // 20))
         K = 20
@@ -71,6 +153,100 @@ def get_hadK(n, transpose=False):
         K = 1
 
     return hadK, K
+
+
+def get_hadK_or_rfft(
+    n, 
+    transpose=False
+):
+    hadK, K = None, None
+    phase = None
+
+    if n % 172 == 0 and is_pow2(n // 172):  # llama-2-7b up
+        # assert (is_pow2(n // 172))
+        K = 172
+        hadK = get_had172().T if transpose else get_had172()
+    elif n % 171 == 0 and is_pow2(n // 171):
+        K = 171
+        base = generate_orthogonal_matrix_pytorch(171)
+        scaled = base * math.sqrt(K)
+        hadK = scaled.T if transpose else scaled
+    elif n % 156 == 0 and is_pow2(n // 156):  # llama-1-30b 3x hidden
+        # assert (is_pow2(n // 156))
+        K = 156
+        hadK = get_had156().T if transpose else get_had156()
+    elif n % 140 == 0 and is_pow2(n // 140):  # llama-1-30b intermediate
+        # assert (is_pow2(n // 140))
+        K = 140
+        hadK = get_had140().T if transpose else get_had140()
+    elif n % 136 == 0 and is_pow2(n // 136):
+        # assert(is_pow2(n // 136))
+        K = 136
+        hadK = get_had136().T if transpose else get_had136()
+    elif n % 124 == 0 and is_pow2(n // 124):  # falcon 180b
+        # assert (is_pow2(n // 124))
+        K = 124
+        hadK = get_had124().T if transpose else get_had124()
+    elif n % 116 == 0 and is_pow2(n // 116):  # falcon 180b
+        # assert (is_pow2(n // 116))
+        K = 116
+        hadK = get_had116().T if transpose else get_had116()
+    elif n % 108 == 0 and is_pow2(n // 108):  # llama-1-13b intermediate
+        # assert (is_pow2(n // 108))
+        K = 108
+        hadK = get_had108().T if transpose else get_had108()
+    elif n % 100 == 0 and is_pow2(n // 100): # Qwen3-32B intermediate
+        # assert (is_pow2(n // 100))
+        K = 100
+        hadK = get_had100().T if transpose else get_had100()
+    elif n % 76 == 0 and is_pow2(n // 76):  
+        # assert (is_pow2(n // 76))
+        K = 76
+        hadK = get_had76().T if transpose else get_had76()
+    elif n % 60 == 0 and is_pow2(n // 60):  # llama-1-13b 3x hidden
+        # assert (is_pow2(n // 60))
+        K = 60
+        hadK = get_had60().T if transpose else get_had60()
+    elif n % 52 == 0 and is_pow2(n // 52):  # llama-1-13b 1x hidden
+        # assert (is_pow2(n // 52))
+        K = 52
+        hadK = get_had52().T if transpose else get_had52()
+    elif n % 36 == 0 and is_pow2(n // 36):
+        # assert (is_pow2(n // 36))
+        K = 36
+        hadK = get_had36().T if transpose else get_had36()
+    elif n % 28 == 0 and is_pow2(n // 28):
+        # assert (is_pow2(n // 28))
+        K = 28
+        hadK = get_had28().T if transpose else get_had28()
+    elif n % 22 == 0 and is_pow2(n // 22):
+        # assert (is_pow2(n // 22))
+        K = 22
+        base = generate_orthogonal_matrix_pytorch(22)
+        scaled = base * math.sqrt(K)
+        hadK = scaled.T if transpose else scaled
+    elif n % 20 == 0 and is_pow2(n // 20):
+        # assert (is_pow2(n // 20))
+        K = 20
+        hadK = get_had20().T if transpose else get_had20()
+    elif n % 12 == 0 and is_pow2(n // 12):
+        # assert (is_pow2(n // 12))
+        K = 12
+        hadK = get_had12().T if transpose else get_had12()
+    elif is_pow2(n):
+        # assert (is_pow2(n))
+        K = 1
+        hadK = None
+    else:
+        K = -1
+        hadK = None
+        phase = get_random_phase(n)  
+
+    return hadK, K, phase
+
+
+
+
 
 
 def matmul_hadU(X, transpose=False):
@@ -97,6 +273,153 @@ def matmul_hadU(X, transpose=False):
 
 def matmul_hadUt(X):
     return matmul_hadU(X, transpose=True)
+
+
+def is_pow2(n):
+    """检查n是否为2的幂"""
+    return n > 0 and (n & (n - 1)) == 0
+
+
+def get_largest_pow2_factor(n):
+    """
+    获取n中最大的2的幂次因子
+    例如：
+    - 1408 = 11 × 128 → 返回 128
+    - 10944 = 171 × 64 → 返回 64
+    - 1024 = 1 × 1024 → 返回 1024
+    """
+    if is_pow2(n):
+        return n
+    
+    # 提取n中所有的2的因数
+    pow2_factor = 1
+    temp = n
+    while temp % 2 == 0:
+        pow2_factor *= 2
+        temp //= 2
+    return pow2_factor
+
+
+def apply_hadamard_blockwise(X, block_size=64):
+    """
+    对矩阵X的最后一个维度应用分块Hadamard变换
+    
+    参数：
+    X: 张量 e.g. (m, n)
+    block_size: Hadamard变换块的大小（必须是2的幂）
+    
+    返回：
+    变换后的张量，形状不变
+    SU: 对角缩放向量（用于反向变换）
+    """
+    assert is_pow2(block_size), f"block_size must be power of 2, got {block_size}"
+    
+    device = X.device
+    dtype = X.dtype
+    original_shape = X.shape
+    
+    # 处理最后一个维度
+    n = original_shape[-1]
+    
+    # 如果n已经是2的幂且小于等于block_size，直接使用matmul_hadU
+    if is_pow2(n) and n <= block_size:
+        hadX = matmul_hadU(X)
+        SU = torch.ones(n, dtype=torch.float32, device='cpu')
+        return hadX, SU
+    
+    # 否则进行分块变换
+    num_blocks = (n + block_size - 1) // block_size
+    
+    # 填充到整数个块
+    padded_n = num_blocks * block_size
+    if n < padded_n:
+        pad_size = padded_n - n
+        X_padded = torch.nn.functional.pad(X, (0, pad_size))
+    else:
+        X_padded = X
+    
+    # reshape成分块形式
+    new_shape = list(original_shape[:-1]) + [num_blocks, block_size]
+    X_blocks = X_padded.view(*new_shape)
+    
+    # 对每个块应用快速Hadamard变换
+    hadX_blocks = torch.zeros_like(X_blocks)
+    for i in range(num_blocks):
+        block = X_blocks[..., i, :]  # shape: (..., block_size)
+        # 使用fast_hadamard_transform库
+        had_block = fast_hadamard_transform.hadamard_transform(block, scale=False)
+        hadX_blocks[..., i, :] = had_block
+    
+    # reshape回原始形状并去除填充
+    hadX = hadX_blocks.reshape(*original_shape[:-1], -1)
+    hadX = hadX[..., :n]
+    
+    # 缩放（Hadamard变换通常要除以sqrt(n_block)）
+    scale_factor = torch.tensor(block_size, dtype=dtype, device=device).sqrt()
+    hadX = hadX / scale_factor
+    
+    # 返回缩放向量（全1表示没有额外的对角缩放）
+    SU = torch.ones(n, dtype=torch.float32, device='cpu')
+    
+    return hadX, SU
+
+
+def apply_hadamard_blockwise_inv(X, block_size=64):
+    """
+    对矩阵X的最后一个维度应用逆向分块Hadamard变换
+    
+    参数：
+    X: 张量 e.g. (m, n)
+    block_size: Hadamard变换块的大小（必须是2的幂）
+    
+    返回：
+    反向变换后的张量，形状不变
+    """
+    assert is_pow2(block_size), f"block_size must be power of 2, got {block_size}"
+    
+    device = X.device
+    dtype = X.dtype
+    original_shape = X.shape
+    
+    # 处理最后一个维度
+    n = original_shape[-1]
+    
+    # 如果n已经是2的幂且小于等于block_size，使用matmul_hadU（自逆性质）
+    if is_pow2(n) and n <= block_size:
+        return matmul_hadU(X)
+    
+    # 否则进行分块反向变换
+    num_blocks = (n + block_size - 1) // block_size
+    
+    # 填充到整数个块
+    padded_n = num_blocks * block_size
+    if n < padded_n:
+        pad_size = padded_n - n
+        X_padded = torch.nn.functional.pad(X, (0, pad_size))
+    else:
+        X_padded = X
+    
+    # reshape成分块形式
+    new_shape = list(original_shape[:-1]) + [num_blocks, block_size]
+    X_blocks = X_padded.view(*new_shape)
+    
+    # 对每个块应用逆向Hadamard变换（Hadamard是自逆的）
+    hadX_blocks = torch.zeros_like(X_blocks)
+    for i in range(num_blocks):
+        block = X_blocks[..., i, :]  # shape: (..., block_size)
+        # 使用fast_hadamard_transform库（Hadamard变换是自逆的）
+        had_block = fast_hadamard_transform.hadamard_transform(block, scale=False)
+        hadX_blocks[..., i, :] = had_block
+    
+    # reshape回原始形状并去除填充
+    hadX = hadX_blocks.reshape(*original_shape[:-1], -1)
+    hadX = hadX[..., :n]
+    
+    # 缩放（Hadamard变换通常要除以sqrt(n_block)）
+    scale_factor = torch.tensor(block_size, dtype=dtype, device=device).sqrt()
+    hadX = hadX / scale_factor
+    
+    return hadX
 
 
 torch.library.define("quip_lib::hadamard", "(Tensor x, float scale) -> Tensor")
@@ -138,6 +461,8 @@ def transform_symbol_to_list(symbol: str, K: int):
 # hadamard matrices for had12, had36.pal2, had52,will,
 # # had60.pal, had108.pal, had140.pal, had156.will, had172.will:
 # http://www.neilsloane.com/hadamard/index.html
+
+
 
 
 def get_had100():
@@ -4589,6 +4914,55 @@ def get_had60():
             +1,
             +1,
         ],
+    ])
+
+
+def get_had44():
+    return torch.FloatTensor([
+        [ +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1,  +1],
+        [ +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1],
+        [ +1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1],
+        [ +1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1],
+        [ +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1],
+        [ +1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1],
+        [ +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1],
+        [ +1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1],
+        [ +1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1],
+        [ +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1],
+        [ +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1],
+        [ +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1],
+        [ +1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1],
+        [ +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1],
+        [ +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1],
+        [ +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1],
+        [ +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1],
+        [ +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1],
+        [ +1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1],
+        [ +1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1],
+        [ +1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1],
+        [ +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1],
+        [ +1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1],
+        [ +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1],
+        [ +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1],
+        [ +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1],
+        [ +1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1],
+        [ +1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1],
+        [ +1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1],
+        [ +1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1],
+        [ +1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1],
+        [ +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1],
+        [ +1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1],
+        [ +1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1],
+        [ +1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1],
+        [ +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1],
+        [ +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1,  +1],
+        [ +1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1,  -1],
+        [ +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1,  +1],
+        [ +1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1,  -1],
+        [ +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1,  +1],
+        [ +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1,  +1],
+        [ +1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1,  -1],
+        [ +1,  -1,  +1,  +1,  -1,  +1,  -1,  +1,  +1,  -1,  -1,  -1,  +1,  -1,  -1,  -1,  -1,  -1,  +1,  +1,  +1,  -1,  +1,  -1,  -1,  -1,  +1,  +1,  +1,  +1,  +1,  -1,  +1,  +1,  +1,  -1,  -1,  +1,  -1,  +1,  -1,  -1,  +1,  -1]
     ])
 
 

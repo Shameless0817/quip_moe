@@ -9,8 +9,25 @@ import torch
 from packaging import version
 
 from transformers.configuration_utils import PretrainedConfig
-from transformers.utils import is_hqq_available, is_quanto_available, is_torchdynamo_compiling, logging
+from transformers.utils import is_hqq_available, is_torchdynamo_compiling, logging
 from transformers.utils.deprecation import deprecate_kwarg
+
+# Handle is_quanto_available which may not exist in some transformers versions
+try:
+    from transformers.utils import is_quanto_available
+except ImportError:
+    def is_quanto_available():
+        """Check if quanto is available."""
+        return importlib.metadata.version("quanto") is not None if importlib.metadata.version("quanto") else False
+        
+    try:
+        import quanto
+        def is_quanto_available():
+            return True
+    except ImportError:
+        def is_quanto_available():
+            return False
+
 
 
 if is_quanto_available():

@@ -18,6 +18,11 @@
 #     --hf_output_path ./mixtral_8x7b_quip_o_only
 
 
-CUDA_VISIBLE_DEVICES=1 python /fact_home/zeyuli/quip_sharp/quantize_mixtral/hfize_mixtral.py \
-    --quantized_path /fact_home/zeyuli/quip_sharp/quantized_mixtral_qkvo \
-    --hf_output_path ./mixtral_8x7b_quip_qkvo
+# CUDA_VISIBLE_DEVICES=1 python /fact_home/zeyuli/quip_sharp/quantize_mixtral/hfize_mixtral.py \
+#     --quantized_path /fact_home/zeyuli/quip_sharp/quantized_mixtral_qkvo \
+#     --hf_output_path ./mixtral_8x7b_quip_qkvo
+
+
+CUDA_VISIBLE_DEVICES=0,1 python /fact_home/zeyuli/quip_sharp/quantize_mixtral/hfize_mixtral.py \
+    --quantized_path /fact_home/zeyuli/quip_sharp/mixtral_8x7b_quip_full \
+    --hf_output_path ./mixtral_8x7b_quip_full_noft

@@ -1,10 +1,14 @@
-python quantize_mixtral/hessian_offline_mixtral_original.py \
-    --base_model mistralai/Mixtral-8x7B-v0.1 \
-    --save_path mixtral_hessian_new_v2 \
-    --batch_size 32 \
-    --devset_size 256 \
+# python quantize_mixtral/hessian_offline_mixtral_original.py \
+#     --base_model mistralai/Mixtral-8x7B-v0.1 \
+#     --save_path mixtral_hessian_new_v2 \
+#     --batch_size 32 \
+#     --devset_size 256 \
+#     --ctx_size 4096 \
+#     --save_activations
+CUDA_VISIBLE_DEVICES=1,2,3 python quantize_mixtral/hessian_offline_mixtral_original.py \
+    --base_model mistralai/Mixtral-8x22B-v0.1 \
+    --save_path /fact_data/zeyuli/mixtral_22B_hessian_qkvo \
+    --batch_size 8 \
+    --devset_size 1024 \
     --ctx_size 4096 \
     --save_activations
-
-
-echo "End Time: $(date)"
